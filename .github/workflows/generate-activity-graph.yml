@@ -1,0 +1,80 @@
+name: Generate activity graph
+
+on:
+    workflow_dispatch:
+    schedule:
+        - cron: '23 0 * * *'
+    push:
+        branches:
+            - main
+        paths:
+            - '.github/workflows/generate-activity-graph.yml'
+            - 'src/**'
+            - 'package.json'
+            - 'package-lock.json'
+            - 'tsconfig.json'
+
+permissions:
+    contents: write
+
+concurrency:
+    group: activity-graph
+    cancel-in-progress: true
+
+jobs:
+    generate:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out the repository
+              uses: actions/checkout@v4
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci --ignore-scripts --no-audit --no-fund
+
+            - name: Build the graph service
+              run: npm run build
+
+            - name: Generate the static SVG
+              env:
+                  TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  PORT: 5100
+              run: |
+                  mkdir -p generated
+                  npm start > server.log 2>&1 &
+                  server_pid=$!
+                  trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+                  curl \
+                    --retry 10 \
+                    --retry-delay 1 \
+                    --retry-connrefused \
+                    --fail \
+                    --silent \
+                    --show-error \
+                    --output generated/activity-graph.svg \
+                    'http://127.0.0.1:5100/graph?username=wengshihao&bg_color=ffffff00&hide_border=true&hide_title=true&area=true&area_color=A78BFA&line=8B5CF6&point=14B8A6&color=64748B&radius=12&height=280'
+
+                  grep -q '<svg' generated/activity-graph.svg
+                  if grep -q "Can't fetch any contribution" generated/activity-graph.svg; then
+                    echo "GitHub contribution data could not be fetched."
+                    exit 1
+                  fi
+
+            - name: Commit an updated graph
+              run: |
+                  if git diff --quiet -- generated/activity-graph.svg; then
+                    echo "Activity graph is already up to date."
+                    exit 0
+                  fi
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add generated/activity-graph.svg
+                  git commit -m "chore: update activity graph"
+                  git push

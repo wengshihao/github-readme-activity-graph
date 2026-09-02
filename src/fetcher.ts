@@ -117,7 +117,12 @@ export class Fetcher {
                 throw new Error('Unexpected API response structure');
             }
         } catch (error) {
-            console.log('error: ', error);
+            const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+            console.error(
+                status
+                    ? `GitHub API request failed with status ${status}`
+                    : 'GitHub API request failed',
+            );
             return `Can't fetch any contribution. Please check your username 😬`;
         }
     }
